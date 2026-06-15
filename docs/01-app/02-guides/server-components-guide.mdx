@@ -1,0 +1,443 @@
+---
+title: Server Components 入门指南
+description: 深入理解 Next.js App Router 中的 React Server Components，掌握服务端渲染、数据获取以及与 Client Components 协作的最佳实践。
+---
+
+## 什么是 Server Components
+
+Server Components（服务端组件）是 React 提供的一种新组件模型，允许你直接在服务端获取数据并渲染 UI，而无需将组件的 JavaScript 代码发送到浏览器。
+
+在 Next.js App Router 中，**所有组件默认都是 Server Components**。这意味着你无需任何额外配置，即可享受服务端渲染带来的性能优势。
+
+Server Components 的核心价值：
+
+- **零 JavaScript 传输**：组件逻辑在服务端执行，不会增加客户端 bundle 体积。
+- **直接访问后端资源**：可以在组件中直接查询数据库、调用内部 API，无需经过额外的网络层。
+- **自动代码分割**：只有被 Client Components 引用的代码才会被打包发送到浏览器。
+- **流式渲染**：结合 `<Suspense>` 边界，可以逐步向客户端推送已渲染的内容，提升首屏体验。
+
+---
+
+## Server Components vs Client Components 的核心区别
+
+理解两者的差异是正确使用 App Router 的前提。
+
+### 对比总览
+
+| 能力 | Server Components | Client Components |
+|------|-------------------|-------------------|
+| 默认行为 | 默认（无需标注） | 需要在文件顶部添加 `'use client'` |
+| 数据获取 | 直接 `await` 获取数据 | 需要 `useEffect` 或在父组件中传入 |
+| 访问数据库/密钥 | 支持 | 不支持 |
+| 事件处理 (`onClick`) | 不支持 | 支持 |
+| React Hooks (`useState` 等) | 不支持 | 支持 |
+| 浏览器 API (`window` 等) | 不支持 | 支持 |
+| JavaScript 发送到客户端 | 无（仅发送渲染结果） | 有（完整组件代码） |
+
+### 何时选择 Server Components
+
+- 展示为主、交互较少的页面（博客文章、产品详情页、文档页）。
+- 需要直接访问数据库或内部服务的场景。
+- 对首屏加载性能有较高要求的页面。
+
+### 何时选择 Client Components
+
+- 需要用户交互的 UI（表单输入、按钮点击、状态切换）。
+- 依赖浏览器 API（地理位置、本地存储、`window` 对象）。
+- 需要使用 React Hooks 管理状态或副作用。
+
+---
+
+## 如何创建和使用 Server Components
+
+### 基本用法
+
+Server Components 不需要任何特殊指令。只要你的文件顶部没有 `'use client'`，它就是一个 Server Components。
+
+```tsx
+// app/about/page.tsx
+// 这是一个 Server Component（默认）
+import { getTeamMembers } from '@/lib/data'
+
+export default async function AboutPage() {
+  const team = await getTeamMembers()
+
+  return (
+    <div>
+      <h1>关于我们</h1>
+      <ul>
+        {team.map((member) => (
+          <li key={member.id}>{member.name} - {member.role}</li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+```
+
+注意以下几点：
+
+1. 组件可以是 `async function`，在服务端等待数据获取完成后。
+2. 直接调用数据库查询函数（如 `getTeamMembers()`），无需通过 HTTP API。
+3. 组件代码不会被发送到浏览器，只有渲染后的 HTML 会被传输。
+
+### `'use client'` 指令的作用
+
+当组件需要交互性时，在文件最顶部（必须在 `import` 语句之前）添加 `'use client'`，将其标记为 Client Component：
+
+```tsx
+// app/ui/counter.tsx
+'use client'
+
+import { useState } from 'react'
+
+export function Counter() {
+  const [count, setCount] = useState(0)
+
+  return (
+    <button onClick={() => setCount(count + 1)}>
+      点击次数：{count}
+    </button>
+  )
+}
+```
+
+**`'use client'` 标记的是一个边界，而不是单个组件。** 一旦某个文件被标记，该文件中 `import` 的所有模块都会被视为 Client Component 的一部分。这意味着：
+
+```
+Server Component
+    ↓
+    ↓ 传递 props（必须是可序列化的）
+    ↓
+'use client'  ← 边界在这里
+    ↓
+Client Component（可以使用 hooks、事件处理、浏览器 API）
+```
+
+### Server Components 与 Client Components 协作
+
+实际项目中，两者通常嵌套使用。典型模式是：Server Component 负责获取数据，将结果作为 props 传递给需要交互的 Client Component。
+
+```tsx
+// app/posts/[id]/page.tsx (Server Component)
+import { LikeButton } from '@/app/ui/like-button'
+import { getPost } from '@/lib/data'
+
+export default async function PostPage({
+  params,
+}: {
+  params: Promise<{ id: string }>
+}) {
+  const { id } = await params
+  const post = await getPost(id)
+
+  return (
+    <article>
+      <h1>{post.title}</h1>
+      <p>{post.content}</p>
+      {/* 将数据传给 Client Component */}
+      <LikeButton likes={post.likes} postId={post.id} />
+    </article>
+  )
+}
+```
+
+```tsx
+// app/ui/like-button.tsx (Client Component)
+'use client'
+
+import { useState } from 'react'
+
+export function LikeButton({ likes, postId }: { likes: number; postId: string }) {
+  const [liked, setLiked] = useState(false)
+
+  return (
+    <button onClick={() => setLiked(!liked)}>
+      {liked ? '已点赞' : '点赞'} ({likes})
+    </button>
+  )
+}
+```
+
+### Props 传递的限制
+
+从 Server Component 向 Client Component 传递 props 时，数据必须是 **JSON 可序列化的**。以下类型**不能**直接传递：
+
+| 不能传递的类型 | 替代方案 |
+|---------------|----------|
+| 函数（普通函数） | 使用 Server Action（`'use server'`） |
+| `Date` 对象 | 使用 `.toISOString()` 转为字符串 |
+| `Map` / `Set` | 转为普通对象或数组 |
+| 类实例 | 转为普通对象 `{ id, name }` |
+
+```tsx
+// 错误：传递 Date 对象
+<PostCard createdAt={post.createdAt} />
+
+// 正确：先序列化为字符串
+<PostCard createdAt={post.createdAt.toISOString()} />
+```
+
+Server Action 是唯一的例外——标记了 `'use server'` 的函数可以被传递给 Client Component：
+
+```tsx
+// app/actions.ts
+'use server'
+
+export async function submitComment(formData: FormData) {
+  // 在服务端处理表单提交
+}
+```
+
+```tsx
+// app/post/page.tsx (Server Component)
+import { submitComment } from '@/app/actions'
+import { CommentForm } from '@/app/ui/comment-form'
+
+export default function PostPage() {
+  // Server Action 可以安全地传给 Client Component
+  return <CommentForm onSubmit={submitComment} />
+}
+```
+
+---
+
+## 数据获取最佳实践
+
+### 直接在 Server Components 中获取数据
+
+Server Components 最强大的能力之一是直接在组件中获取数据，无需额外的 API 层：
+
+```tsx
+// app/dashboard/page.tsx
+import { db } from '@/lib/database'
+
+export default async function DashboardPage() {
+  // 直接访问数据库，密钥不会暴露给客户端
+  const users = await db.user.findMany({ take: 10 })
+  const stats = await db.stats.findFirst()
+
+  return (
+    <div>
+      <h1>仪表盘</h1>
+      <p>总用户数：{stats.totalUsers}</p>
+      <ul>
+        {users.map((user) => (
+          <li key={user.id}>{user.name}</li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+```
+
+**优势**：
+- 无需维护额外的 API 端点。
+- 消除了客户端→服务端的额外网络往返（waterfall）。
+- API 密钥和数据库凭证保留在服务端，不会泄露。
+
+### 避免数据瀑布流（Waterfall）
+
+当页面需要多个独立数据源时，顺序获取会导致性能问题：
+
+```tsx
+// 不推荐：顺序获取，每次等待前一个完成
+async function Dashboard() {
+  const user = await getUser()          // 等待...
+  const posts = await getPosts()        // 再等待...
+  const comments = await getComments()  // 再再等待...
+  return <div>...</div>
+}
+```
+
+**方案一：并行获取（`Promise.all`）**
+
+```tsx
+// 推荐：所有请求同时发出
+async function Dashboard() {
+  const [user, posts, comments] = await Promise.all([
+    getUser(),
+    getPosts(),
+    getComments(),
+  ])
+
+  return <DashboardContent user={user} posts={posts} comments={comments} />
+}
+```
+
+**方案二：流式渲染（`<Suspense>`）**
+
+当某些数据获取较慢时，可以先展示快速加载的部分，慢的部分逐步流式推送：
+
+```tsx
+import { Suspense } from 'react'
+
+function Dashboard() {
+  return (
+    <div>
+      {/* 快速展示用户信息 */}
+      <Suspense fallback={<UserSkeleton />}>
+        <UserSection />
+      </Suspense>
+
+      {/* 较慢的部分独立加载 */}
+      <Suspense fallback={<PostsSkeleton />}>
+        <PostsSection />
+      </Suspense>
+    </div>
+  )
+}
+
+async function UserSection() {
+  const user = await getUser() // 独立获取，不阻塞其他部分
+  return <div>{user.name}</div>
+}
+
+async function PostsSection() {
+  const posts = await getPosts() // 独立获取，并行执行
+  return <PostList posts={posts} />
+}
+```
+
+### 使用 `cache()` 避免重复请求
+
+当多个组件需要同一份数据时，使用 React 的 `cache()` 函数进行请求去重：
+
+```tsx
+// lib/data.ts
+import { cache } from 'react'
+
+// 同一请求在同一次渲染中只会执行一次
+export const getUser = cache(async (id: string) => {
+  return db.user.findUnique({ where: { id } })
+})
+```
+
+```tsx
+// app/layout.tsx 和 app/page.tsx 都调用 getUser(id)
+// 但只会触发一次实际请求
+```
+
+---
+
+## 常见使用场景与注意事项
+
+### 场景一：电商产品页面
+
+一个典型的产品页面混合使用两种组件：Server Component 负责渲染产品信息，Client Component 负责"加入购物车"等交互。
+
+```tsx
+// app/products/[id]/page.tsx
+import { AddToCartButton } from '@/app/ui/add-to-cart'
+import { ProductReviews } from '@/app/ui/product-reviews'
+import { getProduct } from '@/lib/data'
+
+export default async function ProductPage({
+  params,
+}: {
+  params: Promise<{ id: string }>
+}) {
+  const { id } = await params
+  const product = await getProduct(id)
+
+  return (
+    <div>
+      <h1>{product.name}</h1>
+      <p>{product.description}</p>
+      <span>¥{product.price}</span>
+
+      {/* Client Component：处理加购交互 */}
+      <AddToCartButton productId={product.id} />
+
+      {/* Client Component：管理评价展示/筛选 */}
+      <ProductReviews productId={product.id} />
+    </div>
+  )
+}
+```
+
+### 场景二：服务端渲染与客户端渲染的边界设计
+
+设计组件树时，尽量将 `'use client'` 边界**下推**到叶子节点，让更多逻辑保持在服务端执行：
+
+```
+✅ 推荐：将交互逻辑隔离在小组件中
+
+Layout (Server)
+  └── Page (Server)
+        ├── ArticleContent (Server)
+        └── CommentSection (Server)
+              └── CommentForm (Client) ← 'use client' 只在最底层
+```
+
+```
+❌ 不推荐：过早将整个树标记为 Client Component
+
+Layout (Client) ← 'use client' 标记过早
+  └── Page (Client)
+        ├── ArticleContent (Client) ← 全部变成客户端渲染
+        └── CommentSection (Client)
+              └── CommentForm (Client)
+```
+
+### 注意事项
+
+**1. Server Components 不能使用 Hooks 和事件处理**
+
+```tsx
+// 错误：Server Component 中不能使用 useState
+export default function Page() {
+  const [data, setData] = useState(null) // 会报错
+  return <div>{data}</div>
+}
+```
+
+**2. Client Components 不能是 `async` 函数**
+
+```tsx
+// 错误：Client Component 不能是异步的
+'use client'
+export default async function ClientPage() {
+  const data = await fetchData() // 会报错
+  return <div>{data}</div>
+}
+
+// 正确：在 Server Component 中获取数据，通过 props 传入
+// page.tsx (Server Component)
+export default async function Page() {
+  const data = await fetchData()
+  return <ClientDisplay data={data} />
+}
+```
+
+**3. 性能优化：减少 JavaScript Bundle 体积**
+
+Server Components 最直接的优化效果是减少客户端 JavaScript。每减少 1KB 的 JS，都意味着更快的页面加载，尤其在移动网络环境下效果更为明显。
+
+可以通过以下方式量化收益：
+- 使用浏览器 DevTools 的 Network 面板观察 JS bundle 大小变化。
+- 将原本在客户端执行的数据处理逻辑迁移到 Server Component。
+- 确保只有真正需要交互的组件才添加 `'use client'`。
+
+**4. `'use server'` 与 `'use client'` 的区别**
+
+| 指令 | 位置 | 作用 |
+|------|------|------|
+| `'use client'` | 文件顶部 | 标记该文件及其依赖为 Client Component |
+| `'use server'` | 文件顶部或函数内部 | 标记函数为 Server Action，可被 Client Component 调用 |
+
+`'use server'` 标记的函数始终在服务端执行，即使从 Client Component 中调用。
+
+---
+
+## 总结
+
+| 原则 | 说明 |
+|------|------|
+| 默认使用 Server Component | 不需要交互逻辑的组件保持默认即可 |
+| `'use client'` 尽量下推 | 只在真正需要交互的叶子组件上标记 |
+| Props 必须可序列化 | Date → string，Map → object，函数 → Server Action |
+| 并行获取数据 | 使用 `Promise.all` 或 `<Suspense>` 避免瀑布流 |
+| 用 `cache()` 去重 | 多组件共享同一数据时防止重复请求 |
+
+掌握了这些原则，你已经具备了在 App Router 中高效使用 Server Components 的基础。随着项目的复杂化，你会逐渐体会到：将逻辑尽量保留在服务端，不仅让代码更简洁，也让用户体验更流畅。
